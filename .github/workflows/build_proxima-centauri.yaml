@@ -1,0 +1,266 @@
+name: Build ProximaCentauri
+
+on:
+  push:
+    paths-ignore:
+      - .github
+  workflow_dispatch:
+
+env:
+  PNPM_VERSION: 9
+
+  CI: 1
+  DEBUG: 'expo:*'
+
+  EXPO_NO_TELEMENTRY: 1
+  EXPO_USE_FAST_RESOLVER: 1
+  EXPO_UNSTABLE_TREE_SHAKING: 1
+
+permissions:
+  contents: write
+
+jobs:
+  tauri:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: 'macOS, arm64'
+            platform: 'macos-latest'
+            target: 'aarch64-apple-darwin'
+            exec: ''
+
+          - name: 'macOS, x64'
+            platform: 'macos-latest'
+            target: 'x86_64-apple-darwin'
+            exec: ''
+
+          - name: 'Windows, x64'
+            platform: 'windows-latest'
+            target: 'x86_64-pc-windows-msvc'
+            exec: ''
+
+          - name: 'Windows, x86'
+            platform: 'windows-latest'
+            target: 'i686-pc-windows-msvc'
+            exec: ''
+
+          - name: 'Windows 7, x64'
+            platform: 'windows-latest'
+            target: 'x86_64-pc-windows-msvc'
+            exec: 'cargo --config dependencies.tauri.features=["windows7-compat"] tauri'
+
+          - name: 'Windows 7, x86'
+            platform: 'windows-latest'
+            target: 'i686-pc-windows-msvc'
+            exec: 'cargo --config dependencies.tauri.features=["windows7-compat"] tauri'
+
+          - name: 'Windows on arm'
+            platform: 'windows-latest'
+            target: 'aarch64-pc-windows-msvc'
+            exec: ''
+
+          - name: 'Linux, x64'
+            platform: 'ubuntu-latest'
+            target: 'x86_64-unknown-linux-gnu'
+            exec: ''
+
+    name: Build Tauri variants (${{ matrix.name }})
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - id: checkout
+        name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: AlphaKR93/ProximaCentauri
+          submodules: true
+          token: ${{ secrets.GH_PAT }}
+
+      - id: setup-pnpm
+        name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - id: setup-node
+        name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: "pnpm"
+
+      - id: setup-rust
+        name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly
+          target: ${{ matrix.target }}
+
+      - id: setup-prerequisites
+        if: matrix.platform == 'ubuntu-latest'
+        name: Setup prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential wget curl file nsis lld llvm clang cmake openssl mingw-w64 libssl-dev libgtk-3-dev \
+            libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.0-dev libjavascriptcoregtk-4.1-dev \
+            librsvg2-dev patchelf libayatana-appindicator3-dev libsoup2.4-dev
+
+      - id: setup-tauri
+        if: ${{ startsWith(matrix.exec, 'cargo') && endsWith(matrix.exec, 'tauri') }}
+        name: Setup Tauri CLI
+        run: |
+          cargo install tauri-cli
+
+      - id: install-dependencies
+        name: Install dependencies
+        run: pnpm install
+
+      - id: setup-build
+        name: Setup build caches
+        run: |
+          pnpm tailwindcss -i ./modules/gluestack/global.css -o ./node_modules/.cache/nativewind/global.css
+
+      - id: build
+        name: Build Tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: app-v__VERSION__
+          releaseName: 'Milestone v__VERSION__'
+          releaseBody: 'See the assets to download this version and install.'
+          releaseDraft: false
+          includeDebug: true
+          includeRelease: false
+          prerelease: true
+          tauriScript: ${{ matrix.exec }}
+          args: --verbose --target ${{ matrix.target }}
+
+  tauri-oot:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: ARMv6
+            chipset: arm1176
+          - arch: ARMv7
+            chipset: cortex-a8
+          - arch: ARMv8
+            chipset: cortex-a53
+
+    name: Build Tuari Out-of-Tree variants (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    steps:
+      - id: checkout
+        name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: AlphaKR93/ProximaCentauri
+          submodules: true
+          token: ${{ secrets.GH_PAT }}
+
+      - id: build
+        name: Build
+        uses: pguyot/arm-runner-action@v2.5.2
+        with:
+          base_image: https://dietpi.com/downloads/images/DietPi_RPi-${{ matrix.arch }}-Bookworm.img.xz
+          cpu: ${{ matrix.chipset }}
+          bind_mount_repository: true
+          image_additional_mb: 10240
+          optimize_image: false
+          commands: |
+            export HOME=/root
+            export CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
+
+            # Setup runtimes
+            curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash
+            curl https://sh.rustup.rs -sSf | sh -s -- -y
+            . "$HOME/.cargo/env"
+
+            # Install prerequisites
+            apt update -y --allow-releaseinfo-change
+            apt upgrade -y
+            apt autopurge -y
+            apt install -y libwebkit2gtk-4.0-dev build-essential wget libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev curl nodejs
+
+            # Install build requirements
+            cargo install tauri-cli
+            npm install -g pnpm
+
+            # Install dependencies
+            pnpm i
+
+            # Build the application
+            cargo tauri build --verbose
+
+      - id: upload
+        name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: ${{ github.workspace }}/target/release/**/*
+
+  expo-aab:
+    name: Build Android variants
+    runs-on: ubuntu-latest
+    steps:
+      - id: checkout
+        name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: AlphaKR93/ProximaCentauri
+          submodules: true
+          token: ${{ secrets.GH_PAT }}
+
+      - id: setup-java
+        name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: "gradle"
+          cache-dependency-path: "android/build.gradle"
+
+      - id: setup-pnpm
+        name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - id: setup-node
+        name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: "pnpm"
+
+      - id: install-dependencies
+        name: Install dependencies
+        run: pnpm install
+
+      - id: setup-eas
+        name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          token: ${{ secrets.EXPO_PAT }}
+          packager: 'pnpm'
+          expo-version: 'latest'
+          eas-version: 'latest'
+
+      - id: setup-build
+        name: Setup build caches
+        run: |
+          pnpm tailwindcss -i ./modules/gluestack/global.css -o ./node_modules/.cache/nativewind/global.css
+
+      - id: build
+        name: Build
+        env:
+          NODE_OPTIONS: "--max_old_space_size=8192"
+        run: |
+          pnpm --long eas build --local --non-interactive --build-logger-level trace --output=./build.aab --platform android --profile internal
+
+      - id: upload
+        name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: build.aab

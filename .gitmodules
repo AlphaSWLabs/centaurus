@@ -1,0 +1,6 @@
+[submodule "proxima"]
+	path = proxima
+	url = https://github.com/AlphaKR93/proxima-centauri
+[submodule "procyon"]
+	path = procyon
+	url = https://github.com/AlphaKR93/procyon
