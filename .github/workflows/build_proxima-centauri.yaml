@@ -112,7 +112,7 @@ jobs:
         if: ${{ startsWith(matrix.exec, 'cargo') && endsWith(matrix.exec, 'tauri') }}
         name: Setup Tauri CLI
         run: |
-          cargo install tauri-cli
+          cargo install tauri-cli --version "^2.0.0-rc"
 
       - id: install-dependencies
         name: Install dependencies
