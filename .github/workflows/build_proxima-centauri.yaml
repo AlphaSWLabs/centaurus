@@ -258,7 +258,10 @@ jobs:
         name: Build
         env:
           NODE_OPTIONS: "--max_old_space_size=8192"
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_PAT }}
         run: |
+          expo export -p android -s
+          pnpm dlx sentry-expo-upload-sourcemaps dist
           pnpm --long eas build --local --non-interactive --build-logger-level trace --output=./build.aab --platform android --profile internal
 
       - id: upload
